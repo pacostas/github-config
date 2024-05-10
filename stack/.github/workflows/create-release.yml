@@ -1,5 +1,10 @@
 name: Create Release
 
+# TODO remove the poll_usns
+
+# TODO Test: the ubi releases with has codes
+# TODO Test: the jammy releases with has codes and with future scheduled releases
+
 on:
 # Removing below code only for debugging purposes
   # schedule:
@@ -53,24 +58,24 @@ jobs:
               "build_receipt_filename": "build",
               "run_image": "run",
               "run_receipt_filename": "run",
-              "patched_usns_filename_suffix": "patched-usns.json"
+              "patched_usns_filename_suffix": "patched-usns.json",
+              "create_build_image" : true
             }
           ]
           EOF
-            )
+          )
 
           support_usns=true
-          stacks_filename="${{ env.STACKS_FILENAME }}"
           if [[ -f ${{ env.STACKS_FILENAME }} ]]; then
             stacks=$(jq '[.images[] |
-            select(.name != "stack" and .config_dir != "stack" and .output_dir != "build") |
             . +
             {
               "build_image": ("build-" + .name ),
               "build_receipt_filename": ("build-" + .name),
               "run_image": ("run-" + .name ),
               "run_receipt_filename": ("run-" + .name),
-              "patched_usns_filename_suffix": (.name + "-patched-usns.json")
+              "patched_usns_filename_suffix": (.name + "-patched-usns.json"),
+              "create_build_image": (.create_build_image // false)
             }]' ${{ env.STACKS_FILENAME }} )
 
             support_usns=$( jq '.support_usns' ${{ env.STACKS_FILENAME }} )
@@ -109,20 +114,8 @@ jobs:
         stacks: ${{ fromJSON(needs.preparation.outputs.stacks) }}
     outputs:
       usns: ${{ steps.convert_usn_array.outputs.usns }}
-      skip: ${{ steps.skip_poll_usns.outputs.skip }}
     steps:
-    - name: Check if Poll USNs should be skipped
-      id: skip_poll_usns
-      run: |
-        if [ "${{ needs.preparation.outputs.support_usns }}" == "true" ]; then
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "usns=false" >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Find and Download Previous Build Receipt
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' }}
       id: previous_build
       uses: paketo-buildpacks/github-config/actions/release/find-and-download-asset@main
       with:
@@ -134,7 +127,6 @@ jobs:
         strict: true
 
     - name: Find and Download Previous Run Receipt
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' }}
       id: previous_run
       uses: paketo-buildpacks/github-config/actions/release/find-and-download-asset@main
       with:
@@ -151,18 +143,13 @@ jobs:
 
     - name: Get Package List
       id: packages
-      if: >- 
-        ${{
-          steps.skip_poll_usns.outputs.skip == 'false' &&
-          steps.previous_build.outputs.output_path != '' && steps.previous_run.outputs.output_path != '' 
-        }}
+      if: ${{ steps.previous_build.outputs.output_path != '' && steps.previous_run.outputs.output_path != '' }}
       uses: paketo-buildpacks/github-config/actions/stack/generate-package-list@main
       with:
         build_receipt: "${{ github.workspace }}/${{ matrix.stacks.build_image }}-${{ env.RECEIPT_FILENAME_SUFFIX }}"
         run_receipt: "${{ github.workspace }}/${{ matrix.stacks.run_image }}-${{ env.RECEIPT_FILENAME_SUFFIX }}"
 
     - name: Find and Download Previous Patched USNs
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' }}
       id: download_patched
       uses: paketo-buildpacks/github-config/actions/release/find-and-download-asset@main
       with:
@@ -175,13 +162,12 @@ jobs:
     # TODO test with USNs
     - name: Output Patched USNs as JSON String
       id: patched
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' && steps.download_patched.outputs.output_path != '' }}
+      if: ${{ steps.download_patched.outputs.output_path != '' }}
       run: |
         patched=$(jq --compact-output . < "${GITHUB_WORKSPACE}/${{ matrix.stacks.patched_usns_filename_suffix }}")
         printf "patched=%s\n" "${patched}" >> "$GITHUB_OUTPUT"
 
     - name: Get Stack Distribution Name
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' }}
       id: distro
       run: |
         # Extract distro from repo name:
@@ -191,7 +177,6 @@ jobs:
         printf "distro=%s\n" "${distro}" >> "$GITHUB_OUTPUT"
 
     - name: Get New USNs
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' }}
       id: usns
       uses: paketo-buildpacks/github-config/actions/stack/get-usns@main
       with:
@@ -204,12 +189,7 @@ jobs:
         # We have to create a directory to store the new usns,
         # otherwise we get a permission denied error
         mkdir -p new-usns
-
-        if [ "${{ steps.skip_poll_usns.outputs.skip }}" == "true" ]; then
-          echo '[]' > new-usns/${{ matrix.stacks.patched_usns_filename_suffix }}
-        else
-          echo '${{ steps.usns.outputs.usns }}' > new-usns/${{ matrix.stacks.patched_usns_filename_suffix }}
-        fi
+        echo '${{ steps.usns.outputs.usns }}' > new-usns/${{ matrix.stacks.patched_usns_filename_suffix }}
 
     # TODO remove before PR
     - name: Treeeee
@@ -222,13 +202,12 @@ jobs:
         path: new-usns/${{ matrix.stacks.patched_usns_filename_suffix }}
 
     - name: Convert usn array to boolean
-      if: ${{ steps.skip_poll_usns.outputs.skip == 'false' }}
       id: convert_usn_array
       run: |
         # We convert the array to a boolean as the usns are stored on a file 
         # we dont need to store it on the output
         if [ "${{ steps.usns.outputs.usns }}" != '[]' ]; then 
-        echo "usns=true" >> "$GITHUB_OUTPUT"
+          echo "usns=true" >> "$GITHUB_OUTPUT"
         fi
 
 # TODO check that it checks if files have changed and ubi needs a new release
@@ -236,12 +215,7 @@ jobs:
     name: Determine If Stack Files Changed
     runs-on: ubuntu-22.04
     needs: poll_usns 
-    if: >- 
-      ${{
-        ( ! ( needs.poll_usns.outputs.usns == 'true' && github.event_name == 'schedule' ) )
-        ||
-        ( ! ( github.event_name == 'schedule' ) && needs.poll_usns.outputs.skip == 'true' ) 
-      }}
+    if: ${{ ( ! ( (needs.poll_usns.outputs.usns == 'true' || needs.poll_images.outputs.images == 'true' ) &&  github.event_name == 'schedule' ) ) }}
     outputs:
       stack_files_changed: ${{ steps.compare.outputs.stack_files_changed }}
     steps:
@@ -275,12 +249,7 @@ jobs:
   create_stack:
     name: Create Stack
     needs: [ poll_usns, preparation ] 
-    if: >- 
-      ${{
-        ( ! ( needs.poll_usns.outputs.usns == 'true' && github.event_name == 'schedule' ) )
-        ||
-        ( ! ( github.event_name == 'schedule' ) && needs.poll_usns.outputs.skip == 'true' ) 
-      }}
+    if: ${{ ( ! ( (needs.poll_usns.outputs.usns == 'true' || needs.poll_images.outputs.images == 'true' ) &&  github.event_name == 'schedule' ) ) }}
     strategy:
       matrix:
         stacks: ${{ fromJSON(needs.preparation.outputs.stacks) }}
@@ -324,7 +293,9 @@ jobs:
         path: "${{ matrix.stacks.output_dir }}/run.oci"
         if-no-files-found: error 
 
+## TODO validate that it does not upload the build images.
     - name: Upload build image
+      if: ${{ matrix.stacks.create_build_image == true }}
       uses: actions/upload-artifact@v4
       with:
         name: current-build-image-${{ matrix.stacks.name }}
@@ -332,6 +303,7 @@ jobs:
         if-no-files-found: error 
 
     - name: Upload Build receipt
+      if: ${{ matrix.stacks.create_build_image == true }}
       uses: actions/upload-artifact@v4
       with:
         name: current-build-receipt-${{ matrix.stacks.name }}
@@ -674,9 +646,11 @@ jobs:
         registry_repo="${repo//-stack/}"
         echo "registry_repo_name=${registry_repo}" >> "$GITHUB_OUTPUT"
 
+# TODO remove the Build: pacostas/build-java-8-ubi-base:0.0.56  and set it as NA
+# Change the readme file
     - name: Create Release Notes
       id: notes
-      uses: paketo-buildpacks/github-config/actions/stack/release-notes@main
+      uses: pacostas/github-config/actions/stack/release-notes@create-release-reusable
       with:
         build_image: "${{ needs.preparation.outputs.repo_owner }}/${{ matrix.stacks.build_image }}-${{ needs.preparation.outputs.registry_repo_name }}:${{ steps.tag.outputs.tag }}"
         run_image: "${{ needs.preparation.outputs.repo_owner }}/${{ matrix.stacks.run_image }}-${{ needs.preparation.outputs.registry_repo_name }}:${{ steps.tag.outputs.tag }}"
@@ -688,6 +662,7 @@ jobs:
         run_packages_removed_with_force: ${{ needs.diff.outputs.run_removed_with_force }}
         patched_usns: ${{ steps.poll_usns.outputs.usns }}
 
+# TODO test below step
     - name: Setup Release Assets
       id: assets
       run: |
@@ -696,28 +671,24 @@ jobs:
           --arg repo "${{ steps.repo_name.outputs.github_repo_name }}" \
           --arg build_receipt "${{ matrix.stacks.build_receipt_filename }}-${{ env.RECEIPT_FILENAME_SUFFIX }}" \
           --arg run_receipt "${{ matrix.stacks.run_receipt_filename }}-${{ env.RECEIPT_FILENAME_SUFFIX }}" \
-          --arg build_receipt_path "current-build-receipt-${{ matrix.stacks.name }}" \
-          --arg run_receipt_path "current-run-receipt-${{ matrix.stacks.name }}"  \
-          --arg build_image_path "current-build-image-${{ matrix.stacks.name }}/build" \
-          --arg run_image_path "current-run-image-${{ matrix.stacks.name }}/run" \
           '[
             {
-              "path": ($build_image_path + ".oci"),
+              "path": ("current-build-image-${{ matrix.stacks.name }}/build" + ".oci"),
               "name": ($repo + "-" + $tag + "-" + "${{ matrix.stacks.build_image }}.oci"),
               "content_type": "application/gzip"
             },
             {
-              "path": ($run_image_path + ".oci"),
+              "path": ("current-run-image-${{ matrix.stacks.name }}/run" + ".oci"),
               "name": ($repo + "-" + $tag + "-" + "${{ matrix.stacks.run_image }}.oci"),
               "content_type": "application/gzip"
             },
             {
-              "path": ($build_receipt_path),
+              "path": ("current-build-receipt-${{ matrix.stacks.name }}"),
               "name": ($repo + "-" + $tag + "-" + $build_receipt),
               "content_type": "text/plain"
             },
             {
-              "path": ($run_receipt_path),
+              "path": ("current-run-receipt-${{ matrix.stacks.name }}"),
               "name": ($repo + "-" + $tag + "-" + $run_receipt),
               "content_type": "text/plain"
             }]')"
@@ -735,6 +706,18 @@ jobs:
               "content_type": "text/plain"
             }
           ]' <<< "${assets}")"
+        fi
+
+        # Filter the assets to exclude the build images that are not required to be included.
+        if [ -n ${{ matrix.stacks.create_build_image }} == false ] then
+          assets=$(jq -c --arg stack_name "${{ matrix.stacks.name }}" '
+            .[] 
+            | select(
+                .path 
+                | (contains("current-build-image-" + $stack_name + "/build.oci") 
+                  or contains("current-build-receipt-" + $stack_name))
+                | not
+            )' <<< "$assets")
         fi
 
         echo "${assets}" > ${{ matrix.stacks.name }}-release-assets
@@ -756,7 +739,6 @@ jobs:
         name: ${{ matrix.stacks.name }}-release-assets
         path: ${{ matrix.stacks.name }}-release-assets
 
-  # TODO remove the build image.
   # TODO Sync with Michael about the always() function, remove this comment before PR
   create_release:
     name: Create Release
@@ -847,7 +829,7 @@ jobs:
         draft: false
         assets: ${{ steps.merge_release_assets.outputs.assets }}
 
-  # Probably i need to add the new jobs that i craeted to be on the if statement
+  # Probably i need to add the new jobs that i created to be on the if statement
   failure:
     name: Alert on Failure
     runs-on: ubuntu-22.04
