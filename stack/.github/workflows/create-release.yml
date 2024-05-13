@@ -212,6 +212,7 @@ jobs:
 
 # TODO check that it checks if files have changed and ubi needs a new release
   stack_files_changed:
+  # TODO  I need to put the matrix here
     name: Determine If Stack Files Changed
     runs-on: ubuntu-22.04
     needs: poll_usns 
@@ -228,7 +229,7 @@ jobs:
       id: compare
       run: |
         # shellcheck disable=SC2046
-        changed="$(git diff --name-only $(git describe --tags --abbrev=0) -- ${{ matrix.stacks.name }})"
+        changed="$(git diff --name-only $(git describe --tags --abbrev=0) -- ${{ matrix.stacks.config_dir }})"
         if [ -n "${changed}" ]
         then
           echo "Relevant files of ${{ matrix.stacks.name }}, have changed since previous release."
@@ -814,6 +815,7 @@ jobs:
         pattern: current-run-receipt-*
         merge-multiple: true
 
+    # TODO remove before pr
     - name: Treee
       run: tree .
 
