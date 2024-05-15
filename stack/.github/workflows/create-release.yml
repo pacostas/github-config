@@ -721,24 +721,24 @@ jobs:
             )' <<< "$assets")
         fi
 
-        echo "${assets}" > ${{ matrix.stacks.name }}-release-assets
+        echo "${assets}" > release-assets-${{ matrix.stacks.name }}
 
     - name: Save release notes
       id: save_notes
       run: |
-        echo '${{ steps.notes.outputs.release_body }}' > ${{ matrix.stacks.name }}-release-body
+        echo '${{ steps.notes.outputs.release_body }}' > release-body-${{ matrix.stacks.name }}
 
     - name: Upload release notes of ${{ matrix.stacks.name }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.stacks.name }}-release-body
-        path: ${{ matrix.stacks.name }}-release-body
+        name: release-body-${{ matrix.stacks.name }}
+        path: release-body-${{ matrix.stacks.name }}
 
     - name: Upload release assets of ${{ matrix.stacks.name }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.stacks.name }}-release-assets
-        path: ${{ matrix.stacks.name }}-release-assets
+        name: release-assets-${{ matrix.stacks.name }}
+        path: release-assets-${{ matrix.stacks.name }}
 
   # TODO Sync with Michael about the always() function, remove this comment before PR
   create_release:
@@ -750,15 +750,14 @@ jobs:
     - name: download release assets
       uses: actions/download-artifact@v4
       with:
-        pattern: |
-           *-release-assets
+        pattern: release-assets-*
         merge-multiple: true
 
     - name: Merge release assets
       id: merge_release_assets
       run: |
         merged_release_assets='[]'
-        for file in *-release-assets; do
+        for file in release-assets-*; do
           merged_release_assets=$(jq -s add "$file" <(echo "$merged_release_assets") | jq -c)
         done
 
@@ -767,15 +766,14 @@ jobs:
     - name: download release bodies
       uses: actions/download-artifact@v4
       with:
-        pattern: |
-           *-release-body
+        pattern: release-body-*
         merge-multiple: true
 
     - name: Merge release bodies
       id: merge_release_bodies
       run: |
         release_body=""
-        for filename in *-release-body; do
+        for filename in release-body-*; do
           if [[ -n "$release_body" ]]; then
             release_body+=$'\n'
           fi
